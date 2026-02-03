@@ -8,7 +8,7 @@ from nicegui import ui, app, run
 import numpy as np
 import time
 from fastapi import Response
-from time import time
+import time
 
 # Local libraries
 import robot_python_code
@@ -37,8 +37,8 @@ def update_video(video_image):
     if stream_video:
         video_image.force_reload()
 
-def get_time_in_ms():
-    return int(time()*1000)
+def get_time_s():
+    return time.perf_counter()
 
 # Create the gui page
 @ui.page('/')
@@ -82,10 +82,10 @@ def main():
         return Response(content=jpeg, media_type='image/jpeg')
 
     # Convert lidar data to something visible in correct units. This is dummy data for lab 1.
-    def update_lidar_data():
-        for i in range(robot.robot_sensor_signal.num_lidar_rays):
-            distance_in_mm = robot.robot_sensor_signal.distances[i]
-            angle = 360-robot.robot_sensor_signal.angles[i]
+    def update_lidar_data(robot_sensor_signal):
+        for i in range(robot_sensor_signal.num_lidar_rays):
+            distance_in_mm = robot_sensor_signal.distances[i]
+            angle = 360-robot_sensor_signal.angles[i]
             if distance_in_mm > 20 and abs(angle) < 360:
                 index = max(0,min(int(360/lidar_angle_res-1),int((angle-(lidar_angle_res/2))/lidar_angle_res)))
                 lidar_distance_list[index] = distance_in_mm/1000
@@ -95,13 +95,13 @@ def main():
 
         # Experiment trial controls
         if robot.running_trial:
-            delta_time = get_time_in_ms() - robot.trial_start_time
-            if delta_time > parameters.trial_time:
-                robot.running_trial = False
+            delta_time_s = get_time_s() - robot.trial_start_time
+            if delta_time_s >= robot.trial_duration_s:
+                robot.stop_trial()
                 speed_switch.value = False
                 steering_switch.value = False
                 logging_switch.value = False
-                print("End Trial :", delta_time)
+                print("End Trial :", delta_time_s)
 
         # Regular slider controls
         if speed_switch.value:
@@ -166,8 +166,7 @@ def main():
             plt.ylim(-2,2)
 
     def run_trial():
-        robot.trial_start_time = get_time_in_ms()
-        robot.running_trial = True
+        robot.start_trial(parameters.trial_time / 1000.0)
         steering_switch.value = True
         speed_switch.value = True
         logging_switch.value = True
@@ -226,8 +225,9 @@ def main():
         update_connection_to_robot()
         cmd_speed, cmd_steering_angle = update_commands()
         robot.control_loop(cmd_speed, cmd_steering_angle, logging_switch.value)
-        encoder_count_label.set_text(robot.robot_sensor_signal.encoder_counts)
-        update_lidar_data()
+        latest_signal = robot.get_latest_sensor_signal()
+        encoder_count_label.set_text(latest_signal.encoder_counts)
+        update_lidar_data(latest_signal)
         show_lidar_plot()
         update_video(video_image)
         
@@ -235,4 +235,3 @@ def main():
 
 # Run the gui
 ui.run(native=True)
-

@@ -7,10 +7,13 @@ import cv2.aruco as aruco
 import numpy as np
 import matplotlib.pyplot as plt
 import socket
+import threading
+from queue import SimpleQueue
 from time import strftime
 
 # Local libraries
 import parameters
+
 
 # Function to try to connect to the robot via udp over wifi
 def create_udp_communication(arduinoIP, localIP, arduinoPort, localPort, bufferSize):
@@ -20,9 +23,9 @@ def create_udp_communication(arduinoIP, localIP, arduinoPort, localPort, bufferS
         return udp, True
     except:
         print("Failed to create udp communication!")
-        return _, False
-        
-        
+        return None, False
+
+
 # Class to hold the UPD over wifi connection setup
 class UDPCommunication:
     def __init__(self, arduinoIP, localIP, arduinoPort, localPort, bufferSize):
@@ -31,19 +34,27 @@ class UDPCommunication:
         self.localIP = localIP
         self.localPort = localPort
         self.bufferSize = bufferSize
-        self.UDPServerSocket = socket.socket(family = socket.AF_INET, type = socket.SOCK_DGRAM)
+        self.UDPServerSocket = socket.socket(
+            family=socket.AF_INET, type=socket.SOCK_DGRAM
+        )
+        self.UDPServerSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, bufferSize * 16)
         self.UDPServerSocket.bind((localIP, localPort))
-        
+        self.UDPServerSocket.setblocking(False)
+
     # Receive a message from the robot
     def receive_msg(self):
-        bytesAddressPair = self.UDPServerSocket.recvfrom(self.bufferSize)
+        try:
+            bytesAddressPair = self.UDPServerSocket.recvfrom(self.bufferSize)
+        except (socket.timeout, BlockingIOError):
+            return None
+        # bytesAddressPair = self.UDPServerSocket.recvfrom(self.bufferSize)
         message = bytesAddressPair[0]
         address = bytesAddressPair[1]
         clientMsg = "{}".format(message.decode())
         clientIP = "{}".format(address)
-        
+
         return clientMsg
-       
+
     # Send a message to the robot
     def send_msg(self, msg):
         bytesToSend = str.encode(msg)
@@ -52,13 +63,12 @@ class UDPCommunication:
 
 # Class to hold the data logger that records data when needed
 class DataLogger:
-
     # Constructor
     def __init__(self, filename_start, data_name_list):
         self.filename_start = filename_start
         self.filename = filename_start
         self.line_count = 0
-        #self.file = open(filename, 'w')
+        # self.file = open(filename, 'w')
         self.dictionary = {}
         self.data_name_list = data_name_list
         for name in data_name_list:
@@ -67,51 +77,69 @@ class DataLogger:
 
     # Open the log file
     def reset_logfile(self, control_signal):
-        self.filename = self.filename_start + "_"+str(control_signal[0])+"_"+str(control_signal[1]) + strftime("_%d_%m_%y_%H_%M_%S.pkl")
+        self.filename = (
+            self.filename_start
+            + "_"
+            + str(control_signal[0])
+            + "_"
+            + str(control_signal[1])
+            + strftime("_%d_%m_%y_%H_%M_%S.pkl")
+        )
         self.dictionary = {}
         for name in self.data_name_list:
             self.dictionary[name] = []
 
-        
     # Log one time step of data
-    def log(self, logging_switch_on, time, control_signal, robot_sensor_signal, camera_sensor_signal):
+    def log(
+        self,
+        logging_switch_on,
+        time,
+        control_signal,
+        robot_sensor_signal,
+        camera_sensor_signal,
+    ):
         if not logging_switch_on:
             if self.currently_logging:
                 self.currently_logging = False
-        else:
-            if not self.currently_logging:
-                self.currently_logging = True
-                self.reset_logfile(control_signal)
+                self.flush()
+            return
 
-        self.dictionary['time'].append(time)
-        self.dictionary['control_signal'].append(control_signal)
-        self.dictionary['robot_sensor_signal'].append(robot_sensor_signal)
-        self.dictionary['camera_sensor_signal'].append(camera_sensor_signal)
+        if not self.currently_logging:
+            self.currently_logging = True
+            self.reset_logfile(control_signal)
+
+        self.dictionary["time"].append(time)
+        self.dictionary["control_signal"].append(control_signal)
+        self.dictionary["robot_sensor_signal"].append(robot_sensor_signal)
+        self.dictionary["camera_sensor_signal"].append(camera_sensor_signal)
 
         self.line_count += 1
         if self.line_count > parameters.max_num_lines_before_write:
             self.line_count = 0
-            with open(self.filename, 'wb') as file_handle:
+            with open(self.filename, "wb") as file_handle:
                 pickle.dump(self.dictionary, file_handle)
-            
-            
+
+    def flush(self):
+        if self.dictionary and any(len(v) > 0 for v in self.dictionary.values()):
+            with open(self.filename, "wb") as file_handle:
+                pickle.dump(self.dictionary, file_handle)
+
+
 # Utility for loading saved data
 class DataLoader:
-
     # Constructor
     def __init__(self, filename):
         self.filename = filename
-        
+
     # Load a dictionary from file.
     def load(self):
-        with open(self.filename, 'rb') as file_handle:
+        with open(self.filename, "rb") as file_handle:
             loaded_dict = pickle.load(file_handle)
         return loaded_dict
-        
-        
+
+
 # Class to hold a camera sensor data. Not needed for lab 1.
 class CameraSensor:
-
     # Constructor
     def __init__(self, camera_id):
         self.camera_id = camera_id
@@ -119,33 +147,42 @@ class CameraSensor:
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
         self.parameters = aruco.DetectorParameters()
         self.detector = aruco.ArucoDetector(self.aruco_dict, self.parameters)
-        
+
     # Get a new pose estimate from a camera image
     def get_signal(self, last_camera_signal):
         camera_signal = last_camera_signal
         ret, pose_estimate = self.get_pose_estimate()
         if ret:
             camera_signal = pose_estimate
-        
+
         return camera_signal
-        
+
     # If there is a new image, calculate a pose estimate from the fiducial tag on the robot.
     def get_pose_estimate(self):
         ret, frame = self.cap.read()
         if not ret:
             return False, []
-        
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, rejectedImgPoints = self.detector.detectMarkers(gray)
         if ids is not None:
             # Estimate pose for each detected marker
             for i in range(len(ids)):
-                rvec, tvec, _ = aruco.estimatePoseSingleMarkers(corners[i], parameters.marker_length, camera_matrix, dist_coeffs)
-                pose_estimate = [tvec[0][0][0], tvec[0][0][1], tvec[0][0][2], rvec[0][0][0], rvec[0][0][1], rvec[0][0][2]]
+                rvec, tvec, _ = aruco.estimatePoseSingleMarkers(
+                    corners[i], parameters.marker_length, camera_matrix, dist_coeffs
+                )
+                pose_estimate = [
+                    tvec[0][0][0],
+                    tvec[0][0][1],
+                    tvec[0][0][2],
+                    rvec[0][0][0],
+                    rvec[0][0][1],
+                    rvec[0][0][2],
+                ]
             return True, pose_estimate
-        
+
         return False, []
-    
+
     # Close the camera stream
     def close(self):
         self.cap.release()
@@ -154,7 +191,6 @@ class CameraSensor:
 
 # Class to hold a message sender
 class MsgSender:
-
     # Time step size between message to robot sends, in seconds
     delta_send_time = 0.1
 
@@ -163,12 +199,12 @@ class MsgSender:
         self.last_send_time = last_send_time
         self.msg_size = msg_size
         self.udp_communication = udp_communication
-        
+
     # Pack and send a control signal to the robot.
     def send_control_signal(self, control_signal):
         packed_send_msg = self.pack_msg(control_signal)
         self.send(packed_send_msg)
-    
+
     # If its time, send the control signal to the robot.
     def send(self, msg):
         new_send_time = time.perf_counter()
@@ -178,7 +214,7 @@ class MsgSender:
                 message = message + str(data)
             self.udp_communication.send_msg(message)
             self.last_send_time = new_send_time
-      
+
     # Pack a message so it is in the correct format for the robot to receive it.
     def pack_msg(self, msg):
         packed_msg = ""
@@ -186,14 +222,13 @@ class MsgSender:
             if packed_msg == "":
                 packed_msg = packed_msg + str(data)
             else:
-                packed_msg = packed_msg + ", "+ str(data)
+                packed_msg = packed_msg + ", " + str(data)
         packed_msg = packed_msg + "\n"
         return packed_msg
-        
-        
+
+
 # A storage vessel for an instance of a robot signal
 class RobotSensorSignal:
-
     # Constructor
     def __init__(self, unpacked_msg):
         self.encoder_counts = int(unpacked_msg[0])
@@ -202,19 +237,19 @@ class RobotSensorSignal:
         self.angles = []
         self.distances = []
         for i in range(self.num_lidar_rays):
-            index = 3 + i*2
+            index = 3 + i * 2
             self.angles.append(unpacked_msg[index])
-            self.distances.append(unpacked_msg[index+1])
-    
+            self.distances.append(unpacked_msg[index + 1])
+
     # Print the robot sensor signal contents.
     def print(self):
         print("Robot Sensor Signal")
         print(" encoder: ", self.encoder_counts)
-        print(" steering:" , self.steering)
+        print(" steering:", self.steering)
         print(" num_lidar_rays: ", self.num_lidar_rays)
-        print(" angles: ",self.angles)
+        print(" angles: ", self.angles)
         print(" distances: ", self.distances)
-    
+
     # Convert the sensor signal to a list of ints and floats.
     def to_list(self):
         sensor_data_list = []
@@ -224,13 +259,12 @@ class RobotSensorSignal:
         for i in range(self.num_lidar_rays):
             sensor_data_list.append(self.angles[i])
             sensor_data_list.append(self.distances[i])
-        
+
         return sensor_data_list
-            
+
 
 # The robot's message receiver
 class MsgReceiver:
-
     # Determines how often to look for incoming data from the robot.
     delta_receive_time = 0.05
 
@@ -239,28 +273,30 @@ class MsgReceiver:
         self.last_receive_time = last_receive_time
         self.msg_size = msg_size
         self.udp_communication = udp_communication
-      
+
     # Check if its time to look for a new message from the robot.
     def receive(self):
         new_receive_time = time.perf_counter()
         if new_receive_time - self.last_receive_time > self.delta_receive_time:
             received_msg = self.udp_communication.receive_msg()
+            if received_msg is None:
+                return False, ""
             self.last_receive_time = new_receive_time
             return True, received_msg
-            
+
         return False, ""
-    
+
     # Given a new message, put it in a digestable format
     def unpack_msg(self, packed_msg):
         unpacked_msg = []
-        msg_list = packed_msg.split(',')
+        msg_list = packed_msg.split(",")
         if len(msg_list) >= self.msg_size:
             for data in msg_list:
                 unpacked_msg.append(float(data))
             return True, unpacked_msg
 
         return False, unpacked_msg
-        
+
     # Check for new message and unpack it if there is one.
     def receive_robot_sensor_signal(self, last_robot_sensor_signal):
         robot_sensor_signal = last_robot_sensor_signal
@@ -269,50 +305,129 @@ class MsgReceiver:
             unpack_ret, unpacked_receive_msg = self.unpack_msg(packed_receive_msg)
             if unpack_ret:
                 robot_sensor_signal = RobotSensorSignal(unpacked_receive_msg)
-            
+
         return robot_sensor_signal
+
+
+class UDPReceiverThread:
+    def __init__(self, udp_communication, on_message):
+        self.udp_communication = udp_communication
+        self.on_message = on_message
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        self._thread.join(timeout=1.0)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            received_any = False
+            while True:
+                msg = self.udp_communication.receive_msg()
+                if msg is None:
+                    break
+                received_any = True
+                self.on_message(msg)
+            if not received_any:
+                time.sleep(0.001)
 
 
 # The core robot class
 class Robot:
-
     def __init__(self):
         self.connected_to_hardware = False
         self.running_trial = False
         self.trial_start_time = 0
+        self.trial_duration_s = parameters.trial_time / 1000.0
         self.msg_sender = None
         self.msg_receiver = None
+        self.receiver_thread = None
         self.camera_sensor = CameraSensor(parameters.camera_id)
-        self.data_logger = DataLogger(parameters.filename_start, parameters.data_name_list)
+        self.data_logger = DataLogger(
+            parameters.filename_start, parameters.data_name_list
+        )
         self.robot_sensor_signal = RobotSensorSignal([0, 0, 0])
-        self.camera_sensor_signal = [0,0,0,0,0,0]
+        self.camera_sensor_signal = [0, 0, 0, 0, 0, 0]
+        self.last_control_signal = [0, 0]
+        self.logging_enabled = False
+        self._signal_lock = threading.Lock()
         print("New robot!")
-        
+
     # Create udp senders and receiver instances with the udp communication
     def setup_udp_connection(self, udp_communication):
-        self.msg_sender = MsgSender(time.perf_counter(), parameters.num_robot_control_signals, udp_communication)
-        self.msg_receiver = MsgReceiver(time.perf_counter(), parameters.num_robot_sensors, udp_communication)
+        self.msg_sender = MsgSender(
+            time.perf_counter(), parameters.num_robot_control_signals, udp_communication
+        )
+        self.msg_receiver = MsgReceiver(
+            time.perf_counter(), parameters.num_robot_sensors, udp_communication
+        )
+        self.receiver_thread = UDPReceiverThread(
+            udp_communication, self._handle_udp_message
+        )
+        self.receiver_thread.start()
         print("Reset msg_senders and receivers!")
 
     # Stop udp senders and receiver instances with the udp communication
     def eliminate_udp_connection(self):
         self.msg_sender = None
         self.msg_receiver = None
+        if self.receiver_thread is not None:
+            self.receiver_thread.stop()
+            self.receiver_thread = None
         print("Eliminate UDP !!!")
 
+    def start_trial(self, duration_s=None):
+        self.trial_start_time = time.perf_counter()
+        if duration_s is not None:
+            self.trial_duration_s = duration_s
+        self.running_trial = True
+
+    def stop_trial(self):
+        self.running_trial = False
+        self.data_logger.flush()
+
+    def get_latest_sensor_signal(self):
+        with self._signal_lock:
+            return self.robot_sensor_signal
+
     # One iteration of the control loop to be called repeatedly
-    def control_loop(self, cmd_speed = 0, cmd_steering_angle = 0, logging_switch_on = False):
-        # Receive msg
-        if self.msg_sender != None:
-            self.robot_sensor_signal = self.msg_receiver.receive_robot_sensor_signal(self.robot_sensor_signal)
-        
+    def control_loop(self, cmd_speed=0, cmd_steering_angle=0, logging_switch_on=False):
         # Update control signals
         control_signal = [cmd_speed, cmd_steering_angle]
-                
+        self.last_control_signal = control_signal
+        self.logging_enabled = logging_switch_on
+
         # Send msg
         if self.msg_receiver != None:
             self.msg_sender.send_control_signal(control_signal)
-            
-        # Log the data
-        self.data_logger.log(logging_switch_on, time.perf_counter(), control_signal, self.robot_sensor_signal, self.camera_sensor_signal)
 
+    def _handle_udp_message(self, packed_msg):
+        unpacked = self._unpack_sensor_msg(packed_msg)
+        if unpacked is None:
+            return
+        robot_sensor_signal = RobotSensorSignal(unpacked)
+        with self._signal_lock:
+            self.robot_sensor_signal = robot_sensor_signal
+            control_signal = list(self.last_control_signal)
+            logging_enabled = self.logging_enabled
+            camera_signal = list(self.camera_sensor_signal)
+        self.data_logger.log(
+            logging_enabled,
+            time.perf_counter(),
+            control_signal,
+            robot_sensor_signal,
+            camera_signal,
+        )
+
+    def _unpack_sensor_msg(self, packed_msg):
+        tokens = [t.strip() for t in packed_msg.strip().split(",") if t.strip() != ""]
+        if len(tokens) < 3:
+            return None
+        try:
+            return [float(t) for t in tokens]
+        except ValueError:
+            return None
