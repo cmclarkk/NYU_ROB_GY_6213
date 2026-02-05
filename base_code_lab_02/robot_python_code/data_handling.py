@@ -15,6 +15,7 @@ def get_file_data(filename):
     data_dict = data_loader.load()
 
     # The dictionary should have keys ['time', 'control_signal', 'robot_sensor_signal', 'camera_sensor_signal']
+    print(data_dict.keys())
     time_list = data_dict['time']
     control_signal_list = data_dict['control_signal']
     robot_sensor_signal_list = data_dict['robot_sensor_signal']
@@ -33,7 +34,8 @@ def get_file_data(filename):
 # For a given trial, plot the encoder counts, velocities, steering angles
 def plot_trial_basics(filename):
     time_list, encoder_count_list, velocity_list, steering_angle_list = get_file_data(filename)
-    
+    t0 = time_list[0]
+    time_list = [t - t0 for t in time_list]
     plt.plot(time_list, encoder_count_list)
     plt.title('Encoder Values')
     plt.show()
@@ -142,17 +144,18 @@ def sample_model(num_samples):
 
 # Some sample data to test with
 files_and_data = [
-    ['robot_data_60_0_28_01_26_13_41_44.pkl', 67/100], # filename, measured distance in meters
-    ['robot_data_60_0_28_01_26_13_43_41.pkl', 68/100],
-    ['robot_data_60_0_28_01_26_13_37_15.pkl', 113/100],
-    ['robot_data_60_0_28_01_26_13_35_18.pkl', 107/100],
-    ['robot_data_60_0_28_01_26_13_41_10.pkl', 65/100],
-    ['robot_data_60_0_28_01_26_13_42_55.pkl', 70/100],
-    ['robot_data_60_0_28_01_26_13_39_36.pkl', 138/100],
-    ['robot_data_60_0_28_01_26_13_42_19.pkl', 69/100],
-    ['robot_data_60_0_28_01_26_13_36_10.pkl', 109/100],
-    ['robot_data_60_0_28_01_26_13_33_20.pkl', 100/100],
-    ['robot_data_60_0_28_01_26_13_34_28.pkl', 103/100],
+    # ['robot_data_60_0_28_01_26_13_41_44.pkl', 67/100], # filename, measured distance in meters
+    # ['robot_data_60_0_28_01_26_13_43_41.pkl', 68/100],
+    # ['robot_data_60_0_28_01_26_13_37_15.pkl', 113/100],
+    # ['robot_data_60_0_28_01_26_13_35_18.pkl', 107/100],
+    # ['robot_data_60_0_28_01_26_13_41_10.pkl', 65/100],
+    # ['robot_data_60_0_28_01_26_13_42_55.pkl', 70/100],
+    # ['robot_data_60_0_28_01_26_13_39_36.pkl', 138/100],
+    # ['robot_data_60_0_28_01_26_13_42_19.pkl', 69/100],
+    # ['robot_data_60_0_28_01_26_13_36_10.pkl', 109/100],
+    # ['robot_data_60_0_28_01_26_13_33_20.pkl', 100/100],
+    # ['robot_data_60_0_04_02_26_19_14_15.pkl', 103/100],
+    ['robot_data_31_0_04_02_26_19_49_57.pkl', 103/100]
     ]
 
 # Plot the motion model predictions for a single trial
@@ -166,9 +169,11 @@ if False:
     plot_many_trial_predictions(directory)
 
 # A list of files to open, process, and plot - for comparing predicted with actual distances
-if False:
-    directory = ('./data_straight/')    
-    process_files_and_plot(files_and_data, directory)
+if True:
+    directory = ('./data/')    
+    # plot_trial_basics('base_code_lab_02/robot_python_code/data/' + files_and_data[-1][0])
+    plot_trial_basics('data/' + files_and_data[-1][0])
+    # process_files_and_plot(files_and_data, directory)
 
 # Try to sample with the motion model
 if False:

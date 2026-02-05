@@ -8,7 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import socket
 from time import strftime
-
+from time import time
+import time
 # Local libraries
 import parameters
 
@@ -64,6 +65,7 @@ class DataLogger:
         for name in data_name_list:
             self.dictionary[name] = []
         self.currently_logging = False
+        self.t0 = None
 
     # Open the log file
     def reset_logfile(self, control_signal):
@@ -82,18 +84,19 @@ class DataLogger:
             if not self.currently_logging:
                 self.currently_logging = True
                 self.reset_logfile(control_signal)
+        if self.currently_logging:
+            if self.t0 == None:
+                self.t0 = time
+            self.dictionary['time'].append(time)
+            self.dictionary['control_signal'].append(control_signal)
+            self.dictionary['robot_sensor_signal'].append(robot_sensor_signal)
+            self.dictionary['camera_sensor_signal'].append(camera_sensor_signal)
 
-        self.dictionary['time'].append(time)
-        self.dictionary['control_signal'].append(control_signal)
-        self.dictionary['robot_sensor_signal'].append(robot_sensor_signal)
-        self.dictionary['camera_sensor_signal'].append(camera_sensor_signal)
-
-        self.line_count += 1
-        if self.line_count > parameters.max_num_lines_before_write:
-            self.line_count = 0
-            with open(self.filename, 'wb') as file_handle:
-                pickle.dump(self.dictionary, file_handle)
-            
+            self.line_count += 1
+            if self.line_count > parameters.max_num_lines_before_write:
+                self.line_count = 0
+                with open(self.filename, 'wb') as file_handle:
+                    pickle.dump(self.dictionary, file_handle)
             
 # Utility for loading saved data
 class DataLoader:
@@ -316,3 +319,84 @@ class Robot:
         # Log the data
         self.data_logger.log(logging_switch_on, time.perf_counter(), control_signal, self.robot_sensor_signal, self.camera_sensor_signal)
 
+def get_time_in_ms():
+    return int(time.perf_counter()*1000)
+
+logging_enable = True
+speed_enable = True
+steering_enable = True
+speed_cmd = 60
+steering_cmd = 0
+if __name__ == "__main__":
+    robot = Robot()
+
+     # Determine what speed and steering commands to send
+    def update_commands():
+        global speed_cmd, steering_cmd
+        # Experiment trial controls
+        if robot.running_trial:
+            delta_time = get_time_in_ms() - robot.trial_start_time
+            if delta_time > parameters.trial_time:
+                robot.running_trial = False
+                print("End Trial :", delta_time)
+
+        # Regular slider controls
+        if speed_enable:
+            cmd_speed = speed_cmd
+        else:
+            cmd_speed = 0
+        if steering_enable:
+            cmd_steering_angle = steering_cmd
+        else:
+            cmd_steering_angle = 0
+        return cmd_speed, cmd_steering_angle
+        
+    # Update
+    def update_connection_to_robot():
+        if True:
+            if not robot.connected_to_hardware:
+                udp, udp_success = create_udp_communication(parameters.arduinoIP, parameters.localIP, parameters.arduinoPort, parameters.localPort, parameters.bufferSize)
+                if udp_success:
+                    robot.setup_udp_connection(udp)
+                    robot.connected_to_hardware = True
+                    print("Should be set for UDP!")
+                else:
+                    raise RuntimeError("connection failure")
+        else:
+            if robot.connected_to_hardware:
+                robot.eliminate_udp_connection()
+                robot.connected_to_hardware = False
+        
+    # Update the speed slider if steering is not enabled
+    def enable_speed():
+        #if not speed_enable:
+        #    speed_cmd = 0
+        d = 0
+
+    # Update the steering slider if steering is not enabled
+    def enable_steering():
+        #if not steering_enable:
+        #    steering_cmd = 0
+        d = 0
+
+    def run_trial():
+        robot.trial_start_time = get_time_in_ms()
+        robot.running_trial = True
+        steering_enable = True
+        speed_enable = True
+        logging_enable = True
+        print("Start time:", robot.trial_start_time)
+
+    # Update slider values, plots, etc. and run robot control loop
+    def control_loop():
+        st = time.perf_counter()
+        ddl = st + 0.1
+        update_connection_to_robot()
+        cmd_speed, cmd_steering_angle = update_commands()
+        robot.control_loop(cmd_speed, cmd_steering_angle, logging_enable)
+        while st + time.perf_counter() < ddl:
+            pass
+
+    run_trial()
+    while robot.running_trial:
+        control_loop()

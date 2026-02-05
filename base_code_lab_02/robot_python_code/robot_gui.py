@@ -9,6 +9,7 @@ import numpy as np
 import time
 from fastapi import Response
 from time import time
+from time import perf_counter
 
 # Local libraries
 import robot_python_code
@@ -38,7 +39,7 @@ def update_video(video_image):
         video_image.force_reload()
 
 def get_time_in_ms():
-    return int(time()*1000)
+    return int(perf_counter()*1000)
 
 # Create the gui page
 @ui.page('/')
@@ -97,11 +98,12 @@ def main():
         if robot.running_trial:
             delta_time = get_time_in_ms() - robot.trial_start_time
             if delta_time > parameters.trial_time:
-                robot.running_trial = False
                 speed_switch.value = False
                 steering_switch.value = False
-                logging_switch.value = False
                 print("End Trial :", delta_time)
+            if delta_time > parameters.trial_time + 5000:
+                robot.running_trial = False
+                logging_switch.value = False
 
         # Regular slider controls
         if speed_switch.value:
@@ -227,11 +229,11 @@ def main():
         cmd_speed, cmd_steering_angle = update_commands()
         robot.control_loop(cmd_speed, cmd_steering_angle, logging_switch.value)
         encoder_count_label.set_text(robot.robot_sensor_signal.encoder_counts)
-        update_lidar_data()
-        show_lidar_plot()
-        update_video(video_image)
+        # update_lidar_data()
+        # show_lidar_plot()
+        # update_video(video_image)
         
-    ui.timer(0.1, control_loop)
+    ui.timer(0.01, control_loop)
 
 # Run the gui
 ui.run(native=True)
