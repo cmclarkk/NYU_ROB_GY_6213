@@ -83,16 +83,17 @@ class DataLogger:
                 self.currently_logging = True
                 self.reset_logfile(control_signal)
 
-        self.dictionary['time'].append(time)
-        self.dictionary['control_signal'].append(control_signal)
-        self.dictionary['robot_sensor_signal'].append(robot_sensor_signal)
-        self.dictionary['camera_sensor_signal'].append(camera_sensor_signal)
-
-        self.line_count += 1
-        if self.line_count > parameters.max_num_lines_before_write:
-            self.line_count = 0
-            with open(self.filename, 'wb') as file_handle:
-                pickle.dump(self.dictionary, file_handle)
+        if self.currently_logging:
+            self.dictionary['time'].append(time)
+            self.dictionary['control_signal'].append(control_signal)
+            self.dictionary['robot_sensor_signal'].append(robot_sensor_signal)
+            self.dictionary['camera_sensor_signal'].append(camera_sensor_signal)
+    
+            self.line_count += 1
+            if self.line_count > parameters.max_num_lines_before_write:
+                self.line_count = 0
+                with open(self.filename, 'wb') as file_handle:
+                    pickle.dump(self.dictionary, file_handle)
             
             
 # Utility for loading saved data
