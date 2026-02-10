@@ -82,8 +82,10 @@ def fit_y_equals_ax(steering_control_list: np.ndarray, angular_velocity_list: np
 
 
 def plot_steering_vs_angular_velocity(steering_control_list: np.ndarray, angular_velocity_list: np.ndarray, slope_a: float) -> None:
-    x_plot = np.linspace(float(np.min(steering_control_list)) * 1.1, float(np.max(steering_control_list)) * 1.1, 200)
+    x_plot = np.linspace(float(np.min(steering_control_list)), float(np.max(steering_control_list)), 200)
     y_plot = slope_a * x_plot
+    predicted_angular_velocity = slope_a * steering_control_list
+    rmse = float(np.sqrt(np.mean(np.square(angular_velocity_list - predicted_angular_velocity))))
 
     plt.figure()
     plt.plot(steering_control_list, angular_velocity_list, "ko")
@@ -91,7 +93,11 @@ def plot_steering_vs_angular_velocity(steering_control_list: np.ndarray, angular
     plt.xlabel("Steering control")
     plt.ylabel("Angular velocity (deg/s)")
     plt.title("Steering Control vs Angular Velocity")
-    plt.legend(["Data", "Linear fit: y = ax"])
+    equation_label = rf"y = ({slope_a:.4g})x, RMSE = {rmse:.4g} deg/s"
+    plt.legend(["Data", equation_label])
+    plt.axhline(0.0, color="0.4", linewidth=1.0)
+    plt.axvline(0.0, color="0.4", linewidth=1.0)
+    plt.gca().set_box_aspect(0.5)
     plt.grid(True)
     plt.show()
 

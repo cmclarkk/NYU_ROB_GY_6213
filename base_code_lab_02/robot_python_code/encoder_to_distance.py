@@ -68,10 +68,10 @@ def encoder_delta_ticks(data_dict: dict[str, Any], cutoff_from_end: int = 30) ->
     return abs(end - start)
 
 
-def fit_slope_m_per_tick(ticks: list[float], distances_m: list[float]) -> tuple[float, float]:
+def fit_slope_m_per_tick(ticks: list[float], distances_m: list[float]) -> float:
     """
-    Fit: distance_m ≈ slope * ticks + intercept.
-    Returns (slope_m_per_tick, intercept_m).
+    Fit through origin: distance_m ≈ slope * ticks.
+    Returns slope_m_per_tick.
     """
 
     if len(ticks) != len(distances_m):
@@ -79,18 +79,13 @@ def fit_slope_m_per_tick(ticks: list[float], distances_m: list[float]) -> tuple[
     if len(ticks) < 2:
         raise ValueError("need at least 2 points to fit a line")
 
-    n = float(len(ticks))
-    mean_x = sum(ticks) / n
-    mean_y = sum(distances_m) / n
-
-    denom = sum((x - mean_x) ** 2 for x in ticks)
+    denom = sum(x * x for x in ticks)
     if denom == 0:
         raise ValueError("cannot fit slope: all tick values are identical")
 
-    numer = sum((ticks[i] - mean_x) * (distances_m[i] - mean_y) for i in range(len(ticks)))
+    numer = sum(ticks[i] * distances_m[i] for i in range(len(ticks)))
     slope = numer / denom
-    intercept = mean_y - slope * mean_x
-    return float(slope), float(intercept)
+    return float(slope)
 
 def fit_quadratic(x: list[float], y: list[float]) -> tuple[float, float, float]:
     """
@@ -171,19 +166,20 @@ def main() -> None:
         raise SystemExit("Not enough valid trials to fit a trendline.")
 
     ticks_list = [float(x) for x in encoder_deltas]
-    slope_m_per_tick, intercept_m = fit_slope_m_per_tick(ticks_list, measured_distances)
+    slope_m_per_tick = fit_slope_m_per_tick(ticks_list, measured_distances)
 
-    predicted_distances = [slope_m_per_tick * ticks + intercept_m for ticks in ticks_list]
+    predicted_distances = [slope_m_per_tick * ticks for ticks in ticks_list]
     squared_errors = [
         (measured_distances[i] - predicted_distances[i]) ** 2 for i in range(len(measured_distances))
     ]
+    rmse = (sum(squared_errors) / len(squared_errors)) ** 0.5
 
     # Fit a non-constant variance model: sigma_s^2 = f_ss(s)
     # Per lab instructions, use the squared difference as an estimate of sigma_s^2.
     a_var, b_var, c_var = fit_quadratic(measured_distances, squared_errors)
 
     print("Encoder → distance trendline:")
-    print(f"  fit: distance_m = {slope_m_per_tick:.6g} * ticks + {intercept_m:.6g}")
+    print(f"  fit: distance_m = {slope_m_per_tick:.6g} * ticks")
     print(f"  slope (meters per tick): {slope_m_per_tick:.6g}")
     if slope_m_per_tick != 0:
         print(f"  ticks per meter: {1.0 / slope_m_per_tick:.6g}")
@@ -197,19 +193,29 @@ def main() -> None:
         print("Note: matplotlib not installed; skipping plots.")
         return
 
-    # Figure 1: measured vs predicted distance
+    # Figure 1: measured distance vs encoder count, with fitted trendline
     plt.figure()
-    plt.plot(measured_distances, predicted_distances, "ko")
-    max_s = max(max(measured_distances), max(predicted_distances), 0.0)
-    plt.plot([0, max_s], [0, max_s], "b-")
-    plt.title("Distance Trials (Encoder Calibration)")
-    plt.xlabel("Measured Distance (m)")
-    plt.ylabel("Predicted Distance (m)")
-    plt.legend(["Measured vs Predicted", "Slope 1 Line"])
+    plt.plot(ticks_list, measured_distances, "ko")
+    max_ticks = max(ticks_list)
+    line_x = [0.0, max_ticks]
+    line_y = [slope_m_per_tick * x for x in line_x]
+    plt.plot(line_x, line_y, "b-")
+    plt.title("Measured Distance vs. Encoder Measurement")
+    plt.xlabel("Encoder count delta (ticks)")
+    plt.ylabel("Measured Distance (m)")
+    equation_label = rf"y = ({slope_m_per_tick:.4g})x, RMSE = {rmse:.4g} m"
+    plt.legend(["Measured data", equation_label])
+    plt.axhline(0.0, color="0.4", linewidth=1.0)
+    plt.axvline(0.0, color="0.4", linewidth=1.0)
+    plt.xlim(left=0.0)
+    plt.ylim(bottom=0.0)
+    plt.gca().set_box_aspect(0.5)
+    plt.grid(True)
 
     # Figure 2: variance (squared error) vs measured distance, with quadratic fit
     plt.figure()
     plt.plot(measured_distances, squared_errors, "ko")
+    max_s = max(max(measured_distances), max(predicted_distances), 0.0)
     s_grid = [i * max_s / 200.0 for i in range(201)]
     var_fit = [a_var * s * s + b_var * s + c_var for s in s_grid]
     plt.plot(s_grid, var_fit, "r-")
@@ -217,6 +223,12 @@ def main() -> None:
     plt.xlabel("Measured Distance (m)")
     plt.ylabel(r"Estimated Variance $\sigma_s^2$ (m$^2$)")
     plt.legend([r"$(s - \hat{s})^2$", r"Quadratic fit $f_{ss}(s)$"])
+    plt.axhline(0.0, color="0.4", linewidth=1.0)
+    plt.axvline(0.0, color="0.4", linewidth=1.0)
+    plt.xlim(left=0.0)
+    plt.ylim(bottom=0.0)
+    plt.gca().set_box_aspect(0.5)
+    plt.grid(True)
 
     plt.show()
 

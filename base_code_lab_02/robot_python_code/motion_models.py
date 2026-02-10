@@ -4,7 +4,7 @@ import math
 import random
 # Motion Model constants
 
-TICKS_PER_METER = 3402.09
+TICKS_PER_METER = 3481.84
 METERS_PER_TICK = 1.0 / TICKS_PER_METER
 STEERING_TO_OMEGA_DEG_PER_S = 0.476047
 
