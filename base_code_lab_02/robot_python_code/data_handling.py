@@ -129,7 +129,7 @@ def sample_model(num_samples):
     traj_duration = 10
     for i in range(num_samples):
         model = motion_models.MyMotionModel([0,0,0], 0)
-        traj_x, traj_y, traj_theta = model.generate_simulated_traj(traj_duration)
+        _, traj_x, traj_y, traj_theta = model.generate_simulated_traj(traj_duration)
         plt.plot(traj_x, traj_y, 'k.')
 
     plt.title('Sampling the model')
