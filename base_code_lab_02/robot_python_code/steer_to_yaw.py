@@ -5,20 +5,49 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 
-# filename, yaw change magnitude in degrees
-files_and_data: list[tuple[str, float]] = [
-    ("robot_data_50_-5_06_02_26_16_19_28.pkl", 18.0),
-    ("robot_data_50_-10_06_02_26_16_19_49.pkl", 30.0),
-    ("robot_data_50_-20_06_02_26_16_20_04.pkl", 42.0),
-    ("robot_data_50_5_06_02_26_16_18_48.pkl", 9.0),
-    ("robot_data_50_10_06_02_26_16_18_04.pkl", 24.0),
-    ("robot_data_50_20_06_02_26_16_16_28.pkl", 48.0),
+# filename, yaw change in degrees (signed)
+files_and_data = [
+    ["robot_data_50_-5_06_02_26_16_19_28.pkl", 18.0],
+    ["robot_data_50_-10_06_02_26_16_19_49.pkl", 30.0],
+    ["robot_data_50_-20_06_02_26_16_20_04.pkl", 42.0],
+    ["robot_data_50_5_06_02_26_16_18_48.pkl", -9.0],
+    ["robot_data_50_10_06_02_26_16_18_04.pkl", -24.0],
+    ["robot_data_50_20_06_02_26_16_16_28.pkl", -48.0],
+    #new data
+    ["robot_data_50_0_06_02_26_16_00_04.pkl", 2.0],
+    ["robot_data_50_0_06_02_26_16_02_19.pkl", 0.0],
+    ["robot_data_50_0_06_02_26_16_03_13.pkl", -2.0],
+    ["robot_data__50_-20_10_02_26_22_39_15.pkl", 32.0],
+    ["robot_data__50_-20_10_02_26_22_41_07.pkl", 30.0],
+    ["robot_data__50_-20_10_02_26_22_42_49.pkl", 32.0],
+    ["robot_data__50_-15_10_02_26_22_34_38.pkl", 30.0],
+    ["robot_data__50_-15_10_02_26_22_35_51.pkl", 32.0],
+    ["robot_data__50_-15_10_02_26_22_37_01.pkl", 32.0],
+    ["robot_data__50_-10_10_02_26_22_25_45.pkl", 25.0],
+    ["robot_data__50_-10_10_02_26_22_30_50.pkl", 26.0],
+    ["robot_data__50_-10_10_02_26_22_33_17.pkl", 26.0],
+    ["robot_data__50_-5_10_02_26_22_15_39.pkl", 14.0],
+    ["robot_data__50_-5_10_02_26_22_21_13.pkl", 13.0],
+    ["robot_data__50_-5_10_02_26_22_23_06.pkl", 15.0],
+    ["robot_data__50_5_10_02_26_21_51_12.pkl", -4.0],
+    ["robot_data__50_5_10_02_26_22_44_26.pkl", -5.0],
+    ["robot_data__50_5_10_02_26_22_46_27.pkl", -5.0],
+    ["robot_data__50_10_10_02_26_21_53_44.pkl", -21.0],
+    ["robot_data__50_10_10_02_26_21_55_31.pkl", -19.0],
+    ["robot_data__50_10_10_02_26_21_57_15.pkl", -20.0],
+    ["robot_data__50_15_10_02_26_22_00_12.pkl", -29.0],
+    ["robot_data__50_15_10_02_26_22_05_05.pkl", -30.0],
+    ["robot_data__50_15_10_02_26_22_07_37.pkl", -31.0],
+    ["robot_data__50_20_10_02_26_22_09_20.pkl", -38.0],
+    ["robot_data__50_20_10_02_26_22_10_41.pkl", -38.0],
+    ["robot_data__50_20_10_02_26_22_12_35.pkl", -37.0],
 ]
 
 
-DATA_DIRECTORY = Path(__file__).resolve().parent / "data_curved"
+DATA_DIRECTORY = Path(__file__).resolve().parent / "data_curved_new"
 
 
 class _RobotSensorSignal:
@@ -63,28 +92,59 @@ def get_time_taken_for_steering(time_list: list[float], control_signal_list: lis
     return steering_control, time_taken
 
 
-def build_trial_result(data_directory: Path, filename: str, yaw_change_deg_magnitude: float) -> TrialResult:
+def build_trial_result(data_directory: Path, filename: str, yaw_change_deg: float) -> TrialResult:
     data_dict = load_data_file(data_directory / filename)
     time_list = data_dict["time"]
     control_signal_list = data_dict["control_signal"]
     steering_control, time_taken = get_time_taken_for_steering(time_list, control_signal_list)
 
-    yaw_change_signed_deg = float(np.copysign(yaw_change_deg_magnitude, steering_control))
-    angular_velocity = yaw_change_signed_deg / time_taken
-    return TrialResult(filename, steering_control, yaw_change_signed_deg, time_taken, angular_velocity)
+    angular_velocity = yaw_change_deg / time_taken
+    return TrialResult(filename, steering_control, yaw_change_deg, time_taken, angular_velocity)
 
 
-def fit_y_equals_ax(steering_control_list: np.ndarray, angular_velocity_list: np.ndarray) -> float:
-    denominator = float(np.dot(steering_control_list, steering_control_list))
-    if denominator == 0.0:
-        raise ValueError("Cannot fit y = ax when all steering inputs are zero.")
-    return float(np.dot(steering_control_list, angular_velocity_list) / denominator)
+def logistic_centered(
+    steering_control_list: np.ndarray,
+    logistic_a: float,
+    logistic_b: float,
+) -> np.ndarray:
+    return logistic_a * (2.0 / (1.0 + np.exp(-logistic_b * steering_control_list)) - 1.0)
 
 
-def plot_steering_vs_angular_velocity(steering_control_list: np.ndarray, angular_velocity_list: np.ndarray, slope_a: float) -> None:
+def fit_logistic_centered(
+    steering_control_list: np.ndarray,
+    angular_velocity_list: np.ndarray,
+) -> tuple[float, float]:
+    if int(np.unique(steering_control_list).size) < 2:
+        raise ValueError("Need at least two distinct steering inputs to fit a logistic model.")
+
+    initial_a = float(np.max(np.abs(angular_velocity_list)))
+    if initial_a == 0.0:
+        initial_a = 1.0
+
+    linear_slope = float(np.polyfit(steering_control_list, angular_velocity_list, deg=1)[0])
+    initial_b = max(1e-3, min(10.0, abs(2.0 * linear_slope / initial_a)))
+
+    parameters, _ = curve_fit(
+        logistic_centered,
+        steering_control_list,
+        angular_velocity_list,
+        p0=(initial_a, initial_b),
+        bounds=([-np.inf, 1e-6], [np.inf, np.inf]),
+        maxfev=20000,
+    )
+    logistic_a, logistic_b = parameters
+    return float(logistic_a), float(logistic_b)
+
+
+def plot_steering_vs_angular_velocity(
+    steering_control_list: np.ndarray,
+    angular_velocity_list: np.ndarray,
+    logistic_a: float,
+    logistic_b: float,
+) -> None:
     x_plot = np.linspace(float(np.min(steering_control_list)), float(np.max(steering_control_list)), 200)
-    y_plot = slope_a * x_plot
-    predicted_angular_velocity = slope_a * steering_control_list
+    y_plot = logistic_centered(x_plot, logistic_a, logistic_b)
+    predicted_angular_velocity = logistic_centered(steering_control_list, logistic_a, logistic_b)
     rmse = float(np.sqrt(np.mean(np.square(angular_velocity_list - predicted_angular_velocity))))
 
     plt.figure()
@@ -93,25 +153,52 @@ def plot_steering_vs_angular_velocity(steering_control_list: np.ndarray, angular
     plt.xlabel("Steering control")
     plt.ylabel("Angular velocity (deg/s)")
     plt.title("Steering Control vs Angular Velocity")
-    equation_label = rf"y = ({slope_a:.4g})x, RMSE = {rmse:.4g} deg/s"
-    plt.legend(["Data", equation_label])
+    equation_label = rf"y = ({logistic_a:.4g})(2/(1+e^(-({logistic_b:.4g})x)) - 1), RMSE = {rmse:.4g} deg/s"
+    plt.legend(
+        ["Data", equation_label],
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+    )
     plt.axhline(0.0, color="0.4", linewidth=1.0)
     plt.axvline(0.0, color="0.4", linewidth=1.0)
     plt.gca().set_box_aspect(0.5)
+    plt.subplots_adjust(bottom=0.25)
     plt.grid(True)
     plt.show()
 
 
-def plot_variance_vs_steering(steering_control_list: np.ndarray, angular_velocity_list: np.ndarray, slope_a: float) -> None:
-    predicted_angular_velocity = slope_a * steering_control_list
-    variance_list = np.square(angular_velocity_list - predicted_angular_velocity)
-
+def plot_variance_vs_steering(
+    steering_control_list: np.ndarray,
+    variance_list: np.ndarray,
+    variance_mean: float,
+) -> None:
     plt.figure()
     plt.plot(steering_control_list, variance_list, "ko")
+    plt.axhline(variance_mean, color="r", linewidth=1.5)
     plt.xlabel("Steering control")
     plt.ylabel(r"Variance $(\omega - \hat{\omega})^2$ ((deg/s)$^2$)")
     plt.title("Variance vs Steering Control")
+    plt.ylim(0.0, 4.0)
+    equation_label = rf"Mean variance = {variance_mean:.4g}"
+    plt.legend(["Data", equation_label])
     plt.grid(True)
+    plt.show()
+
+
+def plot_variance_boxplot_by_steering(
+    steering_control_list: np.ndarray,
+    variance_list: np.ndarray,
+) -> None:
+    unique_steering_values = np.sort(np.unique(steering_control_list))
+    grouped_variance = [variance_list[steering_control_list == value] for value in unique_steering_values]
+
+    plt.figure()
+    plt.boxplot(grouped_variance, positions=unique_steering_values, widths=2.5, whis=1.5)
+    plt.xlabel("Steering control")
+    plt.ylabel(r"Variance $(\omega - \hat{\omega})^2$ ((deg/s)$^2$)")
+    plt.title("Variance Distribution by Steering Control")
+    plt.ylim(0.0, 4.0)
+    plt.grid(True, axis="y")
     plt.show()
 
 
@@ -120,7 +207,10 @@ def main(show_plot: bool = True, show_variance_plot: bool = True) -> None:
 
     steering_control_list = np.array([trial.steering_control for trial in trial_results], dtype=float)
     angular_velocity_list = np.array([trial.angular_velocity_deg_per_s for trial in trial_results], dtype=float)
-    slope_a = fit_y_equals_ax(steering_control_list, angular_velocity_list)
+    logistic_a, logistic_b = fit_logistic_centered(steering_control_list, angular_velocity_list)
+    predicted_angular_velocity = logistic_centered(steering_control_list, logistic_a, logistic_b)
+    variance_list = np.square(angular_velocity_list - predicted_angular_velocity)
+    variance_mean = float(np.mean(variance_list))
 
     print("Per-trial results:")
     for trial in trial_results:
@@ -129,13 +219,16 @@ def main(show_plot: bool = True, show_variance_plot: bool = True) -> None:
             f"time={trial.time_taken_s:.3f} s, yaw={trial.yaw_change_deg:.2f} deg, "
             f"omega={trial.angular_velocity_deg_per_s:.4f} deg/s"
         )
-    print(f"\nLinear mapping (through origin): angular_velocity = a * steering_control")
-    print(f"a = {slope_a:.6f} (deg/s per steering unit)")
+    print("\nCentered logistic mapping: angular_velocity = a * (2/(1 + exp(-b*steering_control)) - 1)")
+    print(f"a = {logistic_a:.6f}, b = {logistic_b:.6f}")
+    print("Variance summary: mean residual variance")
+    print(f"mean = {variance_mean:.6f}")
 
     if show_plot:
-        plot_steering_vs_angular_velocity(steering_control_list, angular_velocity_list, slope_a)
+        plot_steering_vs_angular_velocity(steering_control_list, angular_velocity_list, logistic_a, logistic_b)
     if show_variance_plot:
-        plot_variance_vs_steering(steering_control_list, angular_velocity_list, slope_a)
+        plot_variance_vs_steering(steering_control_list, variance_list, variance_mean)
+        plot_variance_boxplot_by_steering(steering_control_list, variance_list)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,57 +88,28 @@ def fit_slope_m_per_tick(ticks: list[float], distances_m: list[float]) -> float:
     slope = numer / denom
     return float(slope)
 
-def fit_quadratic(x: list[float], y: list[float]) -> tuple[float, float, float]:
+
+def detect_single_outlier_index(values: list[float], z_threshold: float = 3.5) -> int | None:
     """
-    Fit: y ≈ a*x^2 + b*x + c (least squares).
-    Returns (a, b, c).
+    Detect a single outlier index using modified z-score (MAD based).
+    Returns None if no outlier crosses the threshold.
     """
 
-    if len(x) != len(y):
-        raise ValueError("x and y must have the same length")
-    if len(x) < 3:
-        raise ValueError("need at least 3 points to fit a quadratic")
+    if len(values) < 3:
+        return None
 
-    sx0 = float(len(x))
-    sx1 = sum(xi for xi in x)
-    sx2 = sum(xi * xi for xi in x)
-    sx3 = sum(xi * xi * xi for xi in x)
-    sx4 = sum(xi * xi * xi * xi for xi in x)
+    median_value = statistics.median(values)
+    abs_deviations = [abs(v - median_value) for v in values]
+    mad = statistics.median(abs_deviations)
 
-    sy0 = sum(yi for yi in y)
-    sy1 = sum(x[i] * y[i] for i in range(len(x)))
-    sy2 = sum((x[i] * x[i]) * y[i] for i in range(len(x)))
+    if mad == 0:
+        return None
 
-    A = [
-        [sx4, sx3, sx2],
-        [sx3, sx2, sx1],
-        [sx2, sx1, sx0],
-    ]
-    b = [sy2, sy1, sy0]
-
-    for col in range(3):
-        pivot_row = max(range(col, 3), key=lambda r: abs(A[r][col]))
-        if A[pivot_row][col] == 0:
-            raise ValueError("cannot fit quadratic: singular matrix")
-        if pivot_row != col:
-            A[col], A[pivot_row] = A[pivot_row], A[col]
-            b[col], b[pivot_row] = b[pivot_row], b[col]
-
-        pivot = A[col][col]
-        for j in range(col, 3):
-            A[col][j] /= pivot
-        b[col] /= pivot
-
-        for r in range(3):
-            if r == col:
-                continue
-            factor = A[r][col]
-            for j in range(col, 3):
-                A[r][j] -= factor * A[col][j]
-            b[r] -= factor * b[col]
-
-    a, b_coef, c = b[0], b[1], b[2]
-    return float(a), float(b_coef), float(c)
+    modified_z_scores = [0.6745 * (v - median_value) / mad for v in values]
+    outlier_index = max(range(len(values)), key=lambda i: abs(modified_z_scores[i]))
+    if abs(modified_z_scores[outlier_index]) >= z_threshold:
+        return int(outlier_index)
+    return None
 
 
 def main() -> None:
@@ -174,17 +146,27 @@ def main() -> None:
     ]
     rmse = (sum(squared_errors) / len(squared_errors)) ** 0.5
 
-    # Fit a non-constant variance model: sigma_s^2 = f_ss(s)
-    # Per lab instructions, use the squared difference as an estimate of sigma_s^2.
-    a_var, b_var, c_var = fit_quadratic(measured_distances, squared_errors)
+    # Constant variance model: use average squared residual as sigma_s^2.
+    # Exclude the detected variance outlier from the mean calculation.
+    outlier_index = detect_single_outlier_index(squared_errors)
+    if outlier_index is None:
+        inlier_squared_errors = squared_errors
+    else:
+        inlier_squared_errors = [e for i, e in enumerate(squared_errors) if i != outlier_index]
+    variance_mean = sum(inlier_squared_errors) / len(inlier_squared_errors)
 
     print("Encoder → distance trendline:")
     print(f"  fit: distance_m = {slope_m_per_tick:.6g} * ticks")
     print(f"  slope (meters per tick): {slope_m_per_tick:.6g}")
     if slope_m_per_tick != 0:
         print(f"  ticks per meter: {1.0 / slope_m_per_tick:.6g}")
-    print("Distance → variance trendline:")
-    print(f"  fit: sigma_s^2 = {a_var:.6g} * s^2 + {b_var:.6g} * s + {c_var:.6g}")
+    print("Encoder ticks → variance trendline:")
+    print(f"  fit: sigma_s^2 = {variance_mean:.6g} (average)")
+    if outlier_index is not None:
+        print(
+            f"  excluded outlier at ticks={ticks_list[outlier_index]:.0f}, "
+            f"variance={squared_errors[outlier_index]:.6g}"
+        )
 
     # Plots (optional; environments used for grading typically have matplotlib installed)
     try:
@@ -193,43 +175,70 @@ def main() -> None:
         print("Note: matplotlib not installed; skipping plots.")
         return
 
-    # Figure 1: measured distance vs encoder count, with fitted trendline
-    plt.figure()
-    plt.plot(ticks_list, measured_distances, "ko")
+    # Single figure with stacked subplots:
+    # Top: measured distance vs encoder count
+    # Bottom: variance vs encoder count
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=False)
+
+    # Top subplot: measured distance vs encoder count, with fitted trendline
+    if outlier_index is None:
+        top_data_handle, = ax1.plot(ticks_list, measured_distances, "ko", label="Measured data")
+    else:
+        inlier_ticks = [t for i, t in enumerate(ticks_list) if i != outlier_index]
+        inlier_distances = [d for i, d in enumerate(measured_distances) if i != outlier_index]
+        top_data_handle, = ax1.plot(inlier_ticks, inlier_distances, "ko", label="Measured data")
+        ax1.plot(
+            [ticks_list[outlier_index]],
+            [measured_distances[outlier_index]],
+            "ro",
+            markersize=7,
+        )
     max_ticks = max(ticks_list)
     line_x = [0.0, max_ticks]
     line_y = [slope_m_per_tick * x for x in line_x]
-    plt.plot(line_x, line_y, "b-")
-    plt.title("Measured Distance vs. Encoder Measurement")
-    plt.xlabel("Encoder count delta (ticks)")
-    plt.ylabel("Measured Distance (m)")
     equation_label = rf"y = ({slope_m_per_tick:.4g})x, RMSE = {rmse:.4g} m"
-    plt.legend(["Measured data", equation_label])
-    plt.axhline(0.0, color="0.4", linewidth=1.0)
-    plt.axvline(0.0, color="0.4", linewidth=1.0)
-    plt.xlim(left=0.0)
-    plt.ylim(bottom=0.0)
-    plt.gca().set_box_aspect(0.5)
-    plt.grid(True)
+    top_fit_handle, = ax1.plot(line_x, line_y, "b-", label=equation_label)
+    ax1.set_title("Measured Distance vs. Encoder Measurement")
+    ax1.set_xlabel("Encoder count delta (ticks)")
+    ax1.set_ylabel("Measured Distance (m)")
+    ax1.legend([top_data_handle, top_fit_handle], ["Measured data", equation_label])
+    ax1.axhline(0.0, color="0.4", linewidth=1.0)
+    ax1.axvline(0.0, color="0.4", linewidth=1.0)
+    ax1.set_xlim(left=0.0)
+    ax1.set_ylim(bottom=0.0)
+    ax1.set_box_aspect(0.5)
+    ax1.grid(True)
 
-    # Figure 2: variance (squared error) vs measured distance, with quadratic fit
-    plt.figure()
-    plt.plot(measured_distances, squared_errors, "ko")
-    max_s = max(max(measured_distances), max(predicted_distances), 0.0)
-    s_grid = [i * max_s / 200.0 for i in range(201)]
-    var_fit = [a_var * s * s + b_var * s + c_var for s in s_grid]
-    plt.plot(s_grid, var_fit, "r-")
-    plt.title("Estimated Distance Variance vs Distance")
-    plt.xlabel("Measured Distance (m)")
-    plt.ylabel(r"Estimated Variance $\sigma_s^2$ (m$^2$)")
-    plt.legend([r"$(s - \hat{s})^2$", r"Quadratic fit $f_{ss}(s)$"])
-    plt.axhline(0.0, color="0.4", linewidth=1.0)
-    plt.axvline(0.0, color="0.4", linewidth=1.0)
-    plt.xlim(left=0.0)
-    plt.ylim(bottom=0.0)
-    plt.gca().set_box_aspect(0.5)
-    plt.grid(True)
+    # Bottom subplot: variance (squared error) vs encoder ticks, with average variance
+    if outlier_index is None:
+        ax2.plot(ticks_list, squared_errors, "ko")
+    else:
+        inlier_ticks = [t for i, t in enumerate(ticks_list) if i != outlier_index]
+        inlier_variance = [v for i, v in enumerate(squared_errors) if i != outlier_index]
+        ax2.plot(inlier_ticks, inlier_variance, "ko")
+        ax2.plot(
+            [ticks_list[outlier_index]],
+            [squared_errors[outlier_index]],
+            "ro",
+            markersize=7,
+        )
+    ax2.axhline(variance_mean, color="r", linewidth=1.5)
+    ax2.set_title("Estimated Distance Variance vs Encoder Ticks")
+    ax2.set_xlabel("Encoder count delta (ticks)")
+    ax2.set_ylabel(r"Estimated Variance $\sigma_s^2$ (m$^2$)")
+    mean_label = rf"Average variance = {variance_mean:.4g} m$^2$"
+    if outlier_index is None:
+        ax2.legend([r"$(s - \hat{s})^2$", mean_label])
+    else:
+        ax2.legend(["Inliers", "Outlier", mean_label])
+    ax2.axhline(0.0, color="0.4", linewidth=1.0)
+    ax2.axvline(0.0, color="0.4", linewidth=1.0)
+    ax2.set_xlim(left=0.0)
+    ax2.set_ylim(0.0, 0.002)
+    ax2.set_box_aspect(0.5)
+    ax2.grid(True)
 
+    fig.tight_layout()
     plt.show()
 
 
