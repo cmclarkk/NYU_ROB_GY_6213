@@ -136,69 +136,109 @@ def fit_logistic_centered(
     return float(logistic_a), float(logistic_b)
 
 
-def plot_steering_vs_angular_velocity(
+def detect_outlier_indices(
+    values: np.ndarray,
+    max_outliers: int = 3,
+) -> list[int]:
+    """
+    Detect the strongest `max_outliers` points using iterative MAD scoring.
+    Returns original indices for detected outliers.
+    """
+
+    if values.size < 3 or max_outliers <= 0:
+        return []
+
+    remaining_indices = list(range(values.size))
+    detected: list[int] = []
+    target_count = min(max_outliers, max(0, values.size - 1))
+
+    while len(remaining_indices) >= 2 and len(detected) < target_count:
+        remaining_values = values[remaining_indices]
+        median_value = float(np.median(remaining_values))
+        abs_deviations = np.abs(remaining_values - median_value)
+        mad = float(np.median(abs_deviations))
+        if mad == 0.0:
+            local_index = int(np.argmax(np.abs(remaining_values - median_value)))
+        else:
+            modified_z_scores = 0.6745 * (remaining_values - median_value) / mad
+            local_index = int(np.argmax(np.abs(modified_z_scores)))
+
+        detected.append(remaining_indices[local_index])
+        remaining_indices.pop(local_index)
+
+    return sorted(detected)
+
+
+def plot_steering_velocity_and_variance(
     steering_control_list: np.ndarray,
     angular_velocity_list: np.ndarray,
     logistic_a: float,
     logistic_b: float,
+    variance_list: np.ndarray,
+    outlier_indices: list[int],
+    variance_mean: float,
 ) -> None:
     x_plot = np.linspace(float(np.min(steering_control_list)), float(np.max(steering_control_list)), 200)
-    y_plot = logistic_centered(x_plot, logistic_a, logistic_b)
+    velocity_fit_plot = logistic_centered(x_plot, logistic_a, logistic_b)
     predicted_angular_velocity = logistic_centered(steering_control_list, logistic_a, logistic_b)
     rmse = float(np.sqrt(np.mean(np.square(angular_velocity_list - predicted_angular_velocity))))
 
-    plt.figure()
-    plt.plot(steering_control_list, angular_velocity_list, "ko")
-    plt.plot(x_plot, y_plot, "r-")
-    plt.xlabel("Steering control")
-    plt.ylabel("Angular velocity (deg/s)")
-    plt.title("Steering Control vs Angular Velocity")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=False)
+
+    # Top subplot: steering control vs angular velocity.
+    ax1.plot(steering_control_list, angular_velocity_list, "ko")
+    ax1.plot(x_plot, velocity_fit_plot, "r-")
+    ax1.set_xlabel("Steering control")
+    ax1.set_ylabel("Angular velocity (deg/s)")
+    ax1.set_title("Steering Control vs Angular Velocity")
     equation_label = rf"y = ({logistic_a:.4g})(2/(1+e^(-({logistic_b:.4g})x)) - 1), RMSE = {rmse:.4g} deg/s"
-    plt.legend(
-        ["Data", equation_label],
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.18),
-    )
-    plt.axhline(0.0, color="0.4", linewidth=1.0)
-    plt.axvline(0.0, color="0.4", linewidth=1.0)
-    plt.gca().set_box_aspect(0.5)
-    plt.subplots_adjust(bottom=0.25)
-    plt.grid(True)
-    plt.show()
+    ax1.legend(["Data", equation_label], loc="upper center", bbox_to_anchor=(0.5, -0.18))
+    ax1.axhline(0.0, color="0.4", linewidth=1.0)
+    ax1.axvline(0.0, color="0.4", linewidth=1.0)
+    ax1.set_box_aspect(0.5)
+    ax1.grid(True)
 
+    # Bottom subplot: variance with mean-fit line and red outliers.
+    if not outlier_indices:
+        variance_data_handle, = ax2.plot(steering_control_list, variance_list, "ko")
+        outlier_handle = None
+    else:
+        inlier_mask = np.ones(variance_list.shape[0], dtype=bool)
+        inlier_mask[outlier_indices] = False
+        variance_data_handle, = ax2.plot(steering_control_list[inlier_mask], variance_list[inlier_mask], "ko")
+        outlier_handle, = ax2.plot(
+            steering_control_list[outlier_indices],
+            variance_list[outlier_indices],
+            "ro",
+            markersize=7,
+        )
+    variance_mean_handle = ax2.axhline(variance_mean, color="b", linewidth=1.5)
+    ax2.set_xlabel("Steering control")
+    ax2.set_ylabel(r"Variance $(\omega - \hat{\omega})^2$ ((deg/s)$^2$)")
+    ax2.set_title("Variance vs Steering Control")
+    ax2.set_ylim(bottom=0.0)
+    mean_label = rf"Mean variance (inliers) = {variance_mean:.4g} (deg/s)$^2$"
+    if outlier_handle is None:
+        ax2.legend(
+            [variance_data_handle, variance_mean_handle],
+            ["Data", mean_label],
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+        )
+    else:
+        ax2.legend(
+            [variance_data_handle, outlier_handle, variance_mean_handle],
+            ["Inliers", "Outliers", mean_label],
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+        )
+    ax2.axhline(0.0, color="0.4", linewidth=1.0)
+    ax2.axvline(0.0, color="0.4", linewidth=1.0)
+    ax2.set_box_aspect(0.5)
+    ax2.grid(True)
 
-def plot_variance_vs_steering(
-    steering_control_list: np.ndarray,
-    variance_list: np.ndarray,
-    variance_mean: float,
-) -> None:
-    plt.figure()
-    plt.plot(steering_control_list, variance_list, "ko")
-    plt.axhline(variance_mean, color="r", linewidth=1.5)
-    plt.xlabel("Steering control")
-    plt.ylabel(r"Variance $(\omega - \hat{\omega})^2$ ((deg/s)$^2$)")
-    plt.title("Variance vs Steering Control")
-    plt.ylim(0.0, 4.0)
-    equation_label = rf"Mean variance = {variance_mean:.4g}"
-    plt.legend(["Data", equation_label])
-    plt.grid(True)
-    plt.show()
-
-
-def plot_variance_boxplot_by_steering(
-    steering_control_list: np.ndarray,
-    variance_list: np.ndarray,
-) -> None:
-    unique_steering_values = np.sort(np.unique(steering_control_list))
-    grouped_variance = [variance_list[steering_control_list == value] for value in unique_steering_values]
-
-    plt.figure()
-    plt.boxplot(grouped_variance, positions=unique_steering_values, widths=2.5, whis=1.5)
-    plt.xlabel("Steering control")
-    plt.ylabel(r"Variance $(\omega - \hat{\omega})^2$ ((deg/s)$^2$)")
-    plt.title("Variance Distribution by Steering Control")
-    plt.ylim(0.0, 4.0)
-    plt.grid(True, axis="y")
+    fig.tight_layout()
+    fig.subplots_adjust(hspace=0.55, bottom=0.12)
     plt.show()
 
 
@@ -210,25 +250,39 @@ def main(show_plot: bool = True, show_variance_plot: bool = True) -> None:
     logistic_a, logistic_b = fit_logistic_centered(steering_control_list, angular_velocity_list)
     predicted_angular_velocity = logistic_centered(steering_control_list, logistic_a, logistic_b)
     variance_list = np.square(angular_velocity_list - predicted_angular_velocity)
-    variance_mean = float(np.mean(variance_list))
+    outlier_indices = detect_outlier_indices(variance_list, max_outliers=0)
+    inlier_mask = np.ones(variance_list.shape[0], dtype=bool)
+    inlier_mask[outlier_indices] = False
+    inlier_variance = variance_list[inlier_mask]
+    variance_mean = float(np.mean(inlier_variance))
 
-    print("Per-trial results:")
-    for trial in trial_results:
-        print(
-            f"{trial.filename}: steering={trial.steering_control:.1f}, "
-            f"time={trial.time_taken_s:.3f} s, yaw={trial.yaw_change_deg:.2f} deg, "
-            f"omega={trial.angular_velocity_deg_per_s:.4f} deg/s"
-        )
+    # print("Per-trial results:")
+    # for trial in trial_results:
+    #     print(
+    #         f"{trial.filename}: steering={trial.steering_control:.1f}, "
+    #         f"time={trial.time_taken_s:.3f} s, yaw={trial.yaw_change_deg:.2f} deg, "
+    #         f"omega={trial.angular_velocity_deg_per_s:.4f} deg/s"
+    #     )
     print("\nCentered logistic mapping: angular_velocity = a * (2/(1 + exp(-b*steering_control)) - 1)")
     print(f"a = {logistic_a:.6f}, b = {logistic_b:.6f}")
-    print("Variance summary: mean residual variance")
-    print(f"mean = {variance_mean:.6f}")
+    print("Variance model (inlier mean):")
+    print(f"variance = {variance_mean:.6f} (deg/s)^2")
+    for outlier_index in outlier_indices:
+        print(
+            f"Excluded variance outlier: steering={steering_control_list[outlier_index]:.1f}, "
+            f"variance={variance_list[outlier_index]:.6f}"
+        )
 
-    if show_plot:
-        plot_steering_vs_angular_velocity(steering_control_list, angular_velocity_list, logistic_a, logistic_b)
-    if show_variance_plot:
-        plot_variance_vs_steering(steering_control_list, variance_list, variance_mean)
-        plot_variance_boxplot_by_steering(steering_control_list, variance_list)
+    if show_plot or show_variance_plot:
+        plot_steering_velocity_and_variance(
+            steering_control_list,
+            angular_velocity_list,
+            logistic_a,
+            logistic_b,
+            variance_list,
+            outlier_indices,
+            variance_mean,
+        )
 
 
 if __name__ == "__main__":

@@ -6,12 +6,16 @@ import random
 
 TICKS_PER_METER = 3481.84
 METERS_PER_TICK = 1.0 / TICKS_PER_METER
-STEERING_TO_OMEGA_DEG_PER_S = 0.476047
+LOGISTIC_A_DEG_PER_S = -11.552156
+LOGISTIC_B = 0.103852
+VARIANCE_DISTANCE_M2 = 6.23263e-05
+VARIANCE_ANGULAR_VELOCITY_DEG2_PER_S2 = 0.687878
 
 # A function for obtaining variance in distance travelled as a function of distance travelled
 def variance_distance_travelled_s(distance):
-    # Add student code here
-    var_s = 1
+    # Mean variance from encoder_to_distance.py calibration (m^2), constant model.
+    _ = distance
+    var_s = VARIANCE_DISTANCE_M2
 
     return var_s
 
@@ -24,14 +28,17 @@ def distance_travelled_s(encoder_counts):
 
 # A function for obtaining variance in distance travelled as a function of distance travelled
 def variance_rotational_velocity_w(distance):
-    # Add student code here
-    var_w = 1
+    # Mean variance from steer_to_yaw.py calibration ((deg/s)^2), constant model.
+    _ = distance
+    var_w = VARIANCE_ANGULAR_VELOCITY_DEG2_PER_S2
 
     return var_w
 
 def rotational_velocity_w(steering_angle_command):
-    # Calibrated from steer_to_yaw.py fit: omega_deg_per_s = a * steering_command
-    omega_deg_per_s = STEERING_TO_OMEGA_DEG_PER_S * float(steering_angle_command)
+    # Calibrated from steer_to_yaw.py:
+    # omega_deg_per_s = a * (2 / (1 + exp(-b*steering)) - 1)
+    steering = float(steering_angle_command)
+    omega_deg_per_s = LOGISTIC_A_DEG_PER_S * (2.0 / (1.0 + math.exp(-LOGISTIC_B * steering)) - 1.0)
     w = math.radians(omega_deg_per_s)
     
     return w

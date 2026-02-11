@@ -222,12 +222,12 @@ if False:
     run_my_model_on_trial(filename)
 
 # Plot the motion model predictions for each trial in a folder
-if False:
-    directory = ('./data_curved/')
+if True:
+    directory = ('./data_validation/')
     plot_many_trial_predictions(directory)
 
 # A list of files to open, process, and plot - for comparing predicted with actual distances
-if True:
+if False:
     directory = ('./data_straight/')    
     process_files_and_plot(files_and_data, directory)
 

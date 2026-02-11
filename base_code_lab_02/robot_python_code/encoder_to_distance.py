@@ -89,27 +89,37 @@ def fit_slope_m_per_tick(ticks: list[float], distances_m: list[float]) -> float:
     return float(slope)
 
 
-def detect_single_outlier_index(values: list[float], z_threshold: float = 3.5) -> int | None:
+def detect_outlier_indices(
+    values: list[float],
+    max_outliers: int = 3,
+) -> list[int]:
     """
-    Detect a single outlier index using modified z-score (MAD based).
-    Returns None if no outlier crosses the threshold.
+    Detect the strongest `max_outliers` points using iterative MAD scoring.
+    Returns original indices for detected outliers.
     """
 
-    if len(values) < 3:
-        return None
+    if len(values) < 3 or max_outliers <= 0:
+        return []
 
-    median_value = statistics.median(values)
-    abs_deviations = [abs(v - median_value) for v in values]
-    mad = statistics.median(abs_deviations)
+    remaining_indices = list(range(len(values)))
+    detected: list[int] = []
+    target_count = min(max_outliers, max(0, len(values) - 1))
 
-    if mad == 0:
-        return None
+    while len(remaining_indices) >= 2 and len(detected) < target_count:
+        remaining_values = [values[i] for i in remaining_indices]
+        median_value = statistics.median(remaining_values)
+        abs_deviations = [abs(v - median_value) for v in remaining_values]
+        mad = statistics.median(abs_deviations)
+        if mad == 0:
+            local_index = max(range(len(remaining_values)), key=lambda i: abs(remaining_values[i] - median_value))
+        else:
+            modified_z_scores = [0.6745 * (v - median_value) / mad for v in remaining_values]
+            local_index = max(range(len(remaining_values)), key=lambda i: abs(modified_z_scores[i]))
 
-    modified_z_scores = [0.6745 * (v - median_value) / mad for v in values]
-    outlier_index = max(range(len(values)), key=lambda i: abs(modified_z_scores[i]))
-    if abs(modified_z_scores[outlier_index]) >= z_threshold:
-        return int(outlier_index)
-    return None
+        detected.append(remaining_indices[local_index])
+        remaining_indices.pop(local_index)
+
+    return sorted(detected)
 
 
 def main() -> None:
@@ -147,12 +157,13 @@ def main() -> None:
     rmse = (sum(squared_errors) / len(squared_errors)) ** 0.5
 
     # Constant variance model: use average squared residual as sigma_s^2.
-    # Exclude the detected variance outlier from the mean calculation.
-    outlier_index = detect_single_outlier_index(squared_errors)
-    if outlier_index is None:
-        inlier_squared_errors = squared_errors
+    # Exclude detected variance outliers from the mean calculation.
+    outlier_indices = detect_outlier_indices(squared_errors, max_outliers=1)
+    outlier_index_set = set(outlier_indices)
+    if outlier_indices:
+        inlier_squared_errors = [e for i, e in enumerate(squared_errors) if i not in outlier_index_set]
     else:
-        inlier_squared_errors = [e for i, e in enumerate(squared_errors) if i != outlier_index]
+        inlier_squared_errors = squared_errors
     variance_mean = sum(inlier_squared_errors) / len(inlier_squared_errors)
 
     print("Encoder → distance trendline:")
@@ -162,7 +173,7 @@ def main() -> None:
         print(f"  ticks per meter: {1.0 / slope_m_per_tick:.6g}")
     print("Encoder ticks → variance trendline:")
     print(f"  fit: sigma_s^2 = {variance_mean:.6g} (average)")
-    if outlier_index is not None:
+    for outlier_index in outlier_indices:
         print(
             f"  excluded outlier at ticks={ticks_list[outlier_index]:.0f}, "
             f"variance={squared_errors[outlier_index]:.6g}"
@@ -181,15 +192,15 @@ def main() -> None:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=False)
 
     # Top subplot: measured distance vs encoder count, with fitted trendline
-    if outlier_index is None:
+    if not outlier_indices:
         top_data_handle, = ax1.plot(ticks_list, measured_distances, "ko", label="Measured data")
     else:
-        inlier_ticks = [t for i, t in enumerate(ticks_list) if i != outlier_index]
-        inlier_distances = [d for i, d in enumerate(measured_distances) if i != outlier_index]
+        inlier_ticks = [t for i, t in enumerate(ticks_list) if i not in outlier_index_set]
+        inlier_distances = [d for i, d in enumerate(measured_distances) if i not in outlier_index_set]
         top_data_handle, = ax1.plot(inlier_ticks, inlier_distances, "ko", label="Measured data")
         ax1.plot(
-            [ticks_list[outlier_index]],
-            [measured_distances[outlier_index]],
+            [ticks_list[i] for i in outlier_indices],
+            [measured_distances[i] for i in outlier_indices],
             "ro",
             markersize=7,
         )
@@ -210,15 +221,15 @@ def main() -> None:
     ax1.grid(True)
 
     # Bottom subplot: variance (squared error) vs encoder ticks, with average variance
-    if outlier_index is None:
+    if not outlier_indices:
         ax2.plot(ticks_list, squared_errors, "ko")
     else:
-        inlier_ticks = [t for i, t in enumerate(ticks_list) if i != outlier_index]
-        inlier_variance = [v for i, v in enumerate(squared_errors) if i != outlier_index]
+        inlier_ticks = [t for i, t in enumerate(ticks_list) if i not in outlier_index_set]
+        inlier_variance = [v for i, v in enumerate(squared_errors) if i not in outlier_index_set]
         ax2.plot(inlier_ticks, inlier_variance, "ko")
         ax2.plot(
-            [ticks_list[outlier_index]],
-            [squared_errors[outlier_index]],
+            [ticks_list[i] for i in outlier_indices],
+            [squared_errors[i] for i in outlier_indices],
             "ro",
             markersize=7,
         )
@@ -227,10 +238,10 @@ def main() -> None:
     ax2.set_xlabel("Encoder count delta (ticks)")
     ax2.set_ylabel(r"Estimated Variance $\sigma_s^2$ (m$^2$)")
     mean_label = rf"Average variance = {variance_mean:.4g} m$^2$"
-    if outlier_index is None:
+    if not outlier_indices:
         ax2.legend([r"$(s - \hat{s})^2$", mean_label])
     else:
-        ax2.legend(["Inliers", "Outlier", mean_label])
+        ax2.legend(["Inliers", "Outliers", mean_label])
     ax2.axhline(0.0, color="0.4", linewidth=1.0)
     ax2.axvline(0.0, color="0.4", linewidth=1.0)
     ax2.set_xlim(left=0.0)
