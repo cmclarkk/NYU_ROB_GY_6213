@@ -163,12 +163,25 @@ def process_files_and_plot(files_and_data, directory):
 
 # Sample and plot some simulated trials
 def sample_model(num_samples):
-    traj_duration = 10
-    for i in range(num_samples):
-        model = motion_models.MyMotionModel([0,0,0], 0)
-        traj_x, traj_y, traj_theta = model.generate_simulated_traj(traj_duration)
-        plt.plot(traj_x, traj_y, 'k.')
-
+    # traj_duration = np.random.randint(5, 15, num_samples)
+    # steering_angle = np.random.randint(-20, 20, num_samples)
+    traj_duration = [10, 20, 30]
+    steering_angle = [-10, -5, 0, 5, 10]
+    legends = []
+    for duration in traj_duration:
+        for angle in steering_angle:
+            legends.append(f"{duration}s, {angle}")
+            traj_xs = []
+            traj_ys = []
+            traj_thetas = []
+            for i in range(num_samples):
+                model = motion_models.MyMotionModel([0,0,0], 0)
+                traj_x, traj_y, traj_theta = model.generate_simulated_traj(duration, angle)
+                traj_xs.append(traj_x[-1])
+                traj_ys.append(traj_y[-1])
+                traj_thetas.append(traj_theta[-1])
+            plt.scatter(traj_xs, traj_ys)
+    plt.legend(legends, loc='lower right', ncol=3, columnspacing=0.1, markerscale=1)
     plt.title('Sampling the model')
     plt.xlabel('X (m)')
     plt.ylabel('Y (m)')
@@ -198,13 +211,13 @@ if False:
     run_my_model_on_trial(filename)
 
 # Plot the motion model predictions for each trial in a folder
-if False:
-    directory = ('robot_python_code/data')
-    plot_many_trial_predictions(directory)
+# if True:
+#     directory = ('robot_python_code/data')
+#     plot_many_trial_predictions(directory)
 
-if True:
-    directory = ('robot_python_code/loop_data')
-    plot_many_trial_predictions(directory)
+# if True:
+#     directory = ('robot_python_code/loop_data')
+#     plot_many_trial_predictions(directory)
 
 # A list of files to open, process, and plot - for comparing predicted with actual distances
 if False:
@@ -212,5 +225,5 @@ if False:
     process_files_and_plot(files_and_data, directory)
 
 # Try to sample with the motion model
-if False:
-    sample_model(200)
+if True:
+    sample_model(100)

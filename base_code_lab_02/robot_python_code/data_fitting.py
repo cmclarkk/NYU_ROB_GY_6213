@@ -172,20 +172,22 @@ def fit_rot(yaw_rate, steering_angles, velocities):
     def model_rot(xdata, a, b, c, d, e, f, with_intercept=True):
         return (
             a * xdata[0]
-            + b * xdata[1]
-            + c * xdata[0] ** 2
-            + d * xdata[1] ** 2
+            # + b * xdata[1]
+            + c * xdata[0] ** 3 * xdata[1]
+            # + d * xdata[0] ** 2 * xdata[1]
             + e * xdata[0] * xdata[1]
             + (f if with_intercept else 0)
         )
 
-    value_model = partial(model_rot, with_intercept=False)
+    value_model = partial(model_rot, with_intercept=True)
     popt, pcov = curve_fit(
         value_model,
-        (steering_angles.flatten(), velocities.flatten()),
-        yaw_rate.flatten(),
+        (np.concatenate((steering_angles.flatten(), np.zeros(1))), 
+         np.concatenate((velocities.flatten(), np.zeros(1)))),
+        np.concatenate((yaw_rate.flatten(), np.zeros(1))),
     )
     print("rot Fitted parameters:", popt)
+    print("eval at steering 10, velocity 5:", value_model((10, 5), *popt))
 
     # Calculate fitted values and squared errors
     fitted_values = value_model(
@@ -367,5 +369,5 @@ def load_rot():
     )
 
 
-# load_linear()
-load_rot()
+load_linear()
+# load_rot()
