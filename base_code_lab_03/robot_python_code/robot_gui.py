@@ -3,21 +3,22 @@ import asyncio
 import cv2
 import math
 from matplotlib import pyplot as plt
+from matplotlib.patches import Ellipse
 import matplotlib
 from nicegui import ui, app, run
 import numpy as np
 import time
 from fastapi import Response
 from time import time
-from time import perf_counter
 
 # Local libraries
+from robot import Robot
 import robot_python_code
 import parameters
 
 # Global variables
 logging = False
-stream_video = False
+stream_video = True
 
 
 # Frame converter for the video stream, from OpenCV to a JPEG image
@@ -39,14 +40,14 @@ def update_video(video_image):
         video_image.force_reload()
 
 def get_time_in_ms():
-    return int(perf_counter()*1000)
+    return int(time()*1000)
 
 # Create the gui page
 @ui.page('/')
 def main():
 
     # Robot variables
-    robot = robot_python_code.Robot()
+    robot = Robot()
 
     # Lidar data
     max_lidar_range = 12
@@ -66,7 +67,7 @@ def main():
     
     # Set up the video stream, not needed for lab 1
     if stream_video:
-        video_capture = cv2.VideoCapture(1)
+        video_capture = cv2.VideoCapture(parameters.camera_id)
     
     # Enable frame grabs from the video stream.
     @app.get('/video/frame')
@@ -98,19 +99,18 @@ def main():
         if robot.running_trial:
             delta_time = get_time_in_ms() - robot.trial_start_time
             if delta_time > parameters.trial_time:
+                robot.running_trial = False
                 speed_switch.value = False
                 steering_switch.value = False
                 robot.extra_logging = True
                 print("End Trial :", delta_time)
-            if delta_time > parameters.trial_time + 5000:
-                robot.running_trial = False
-                logging_switch.value = False
-
+        
         if robot.extra_logging:
             delta_time = get_time_in_ms() - robot.trial_start_time
             if delta_time > parameters.trial_time + parameters.extra_trial_log_time:
                 logging_switch.value = False
                 robot.extra_logging = False
+                
 
         # Regular slider controls
         if speed_switch.value:
@@ -142,14 +142,10 @@ def main():
         
     # Update the speed slider if steering is not enabled
     def enable_speed():
-        #if not speed_switch.value:
-        #    slider_speed.value = 0
         d = 0
 
     # Update the steering slider if steering is not enabled
     def enable_steering():
-        #if not steering_switch.value:
-        #    slider_steering.value = 0
         d = 0
 
     # Visualize the lidar scans
@@ -170,10 +166,37 @@ def main():
                 y = [distance * sin_ang, max_lidar_range * sin_ang]
                 plt.plot(x, y, 'r')
             plt.grid(True)
-            #plt.axis('equal')
             plt.xlim(-2,2)
             plt.ylim(-2,2)
 
+    # Visualize the lidar scans
+    def show_localization_plot():
+        with main_plot:
+            fig = main_plot.fig
+            fig.patch.set_facecolor('black')
+            plt.clf()
+            plt.style.use('dark_background')
+            plt.tick_params(axis='x', colors='lightgray')
+            plt.tick_params(axis='y', colors='lightgray')
+            
+            sigma = 3
+            covar_matrix = parameters.covariance_plot_scale * robot.extended_kalman_filter.state_covariance[0:2,0:2]#np.array([[sigma, -sigma*0.9],[ -sigma*0.9, sigma]])
+            x_est = robot.extended_kalman_filter.state_mean[0]
+            y_est = robot.extended_kalman_filter.state_mean[1]
+            lambda_, v = np.linalg.eig(covar_matrix)
+            lambda_ = np.sqrt(lambda_)
+            ell = Ellipse(xy=(x_est, y_est), alpha=0.5, facecolor='red',width=lambda_[0], height=lambda_[1], angle=np.rad2deg(np.arctan2(*v[:,0][::-1])))
+            ax = fig.gca()
+            ax.add_artist(ell)
+
+            plt.plot(x_est, y_est, 'ro')
+
+            plt.grid(True)
+            plot_range = 1
+            plt.xlim(-plot_range, plot_range)
+            plt.ylim(-plot_range, plot_range)
+
+    # Run an experiment trial from a button push
     def run_trial():
         robot.trial_start_time = get_time_in_ms()
         robot.running_trial = True
@@ -236,11 +259,12 @@ def main():
         cmd_speed, cmd_steering_angle = update_commands()
         robot.control_loop(cmd_speed, cmd_steering_angle, logging_switch.value)
         encoder_count_label.set_text(robot.robot_sensor_signal.encoder_counts)
-        update_lidar_data()
-        show_lidar_plot()
-        #update_video(video_image)
+        #update_lidar_data()
+        #show_lidar_plot()
+        show_localization_plot()
+        update_video(video_image)
         
-    ui.timer(0.01, control_loop)
+    ui.timer(0.1, control_loop)
 
 # Run the gui
 ui.run(native=True)
